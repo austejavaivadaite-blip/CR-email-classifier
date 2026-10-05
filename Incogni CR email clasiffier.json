@@ -1,0 +1,749 @@
+{
+  "name": "Incogni CR email clasiffier",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 300,
+        "simple": false,
+        "filters": {
+          "labelIds": [
+            "INBOX"
+          ],
+          "readStatus": "unread",
+          "sender": "={support@unmask.com support@mylifecs.atlassian.net privacy@rocketreach.co support@homes.com privacysupport@homes.com info@bizprofile.net support@freepeoplesearch.com feedback@192.com help@nativeamericannetroots.net support@checkpeople.com info@buzzfile.com service.client@le118000.fr support@information.com support@doximity.com kundeservice.privat@gulesider.no privacy@gulesider.no help@meritpages.com sajeev@adapt.io ranjith@adapt.io support@nextdoor.com privacy@zoominfo.com kundservice@hitta.se Customer_Care@xing.com privacy@bloomberg.net privacy@peoplerecords.org support@theorg.com support@cocofinder.com help@clustal.org privacy@experience.com lead411_privacy@l4mail.com support@mapquest.zendesk.com help@mapquest.com support@nuwber.zendesk.com support@welli.com jarvis@newbizbot.ai privacy@freebackgroundchecks.com privacy@move.com privacy@legacy.com}"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        208,
+        0
+      ],
+      "id": "20ea62b0-a982-4489-a887-4cad0cc2e236",
+      "name": "Get many messages",
+      "webhookId": "1bec3217-8694-4f5b-b74c-9d33b80dc8bc",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "HuE9BjMKMt1Uhmc2",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Access current item directly\nconst emailBody = $input.item.json.text || $input.item.json.html;\nconst subject = $input.item.json.subject;\nconst messageId = $input.item.json.id;\nconst threadId = $input.item.json.threadId;\nconst html = $input.item.json.html;\n\n// Function to clean PII from email\nfunction cleanEmailForAI(content) {\n  if (!content) return '';\n  \n  let cleaned = content;\n  \n  // Remove email addresses\n  cleaned = cleaned.replace(/\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b/g, '[EMAIL]');\n  \n  // Remove phone numbers\n  cleaned = cleaned.replace(/\\b\\d{3}[-.]?\\d{3}[-.]?\\d{4}\\b/g, '[PHONE]');\n  \n  // Remove names in salutations\n  cleaned = cleaned.replace(/Dear\\s+[A-Z][a-z]+(\\s+[A-Z][a-z]+)?/g, 'Dear [NAME]');\n  cleaned = cleaned.replace(/Hi\\s+[A-Z][a-z]+/g, 'Hi [NAME]');\n  \n  return cleaned;\n}\n\n// Extract removal ID in format: ID-V10192G\n// Pattern: ID- followed by letter + 6 alphanumeric characters\nfunction extractRemovalId(text) {\n  if (!text) return null;\n  \n  // Pattern: ID- + one letter + exactly 6 alphanumeric characters\n  const pattern = /ID-[A-Z0-9]{7}\\b/i;\n  \n  const match = text.match(pattern);\n  \n  if (match) {\n    // Return uppercase version for consistency\n    return match[0].toUpperCase();\n  }\n  \n  return null;\n}\n\nconst cleanedBody = cleanEmailForAI(emailBody);\nconst extractedId = extractRemovalId(subject + ' ' + emailBody);\n\n// Return data for OpenAI node\nreturn {\n  json: {\n    message_id: messageId,\n    thread_id: threadId,\n    subject: subject,\n    cleaned_body: cleanedBody,\n    extracted_id: extractedId,\n    original_from: $input.item.json.from,\n    html:$input.item.json.html\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ],
+      "id": "01ac4b25-c52f-4c9d-993a-208270f7a4f6",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d9aae778-e4ef-4996-ade8-42247cf5049c",
+              "leftValue": "={{ $json.extracted_id }}",
+              "rightValue": "=",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        640,
+        -64
+      ],
+      "id": "8702a4a9-749f-4b3e-be8d-6f94222b4364",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const subject = $json.subject || '';\nconst cleanedBody = $json.cleaned_body || '';\nconst htmlBody = ($json.html || '').replace(/<[^>]*>/g, ' ');\nconst fullText = (subject + ' ' + cleanedBody + ' ' + htmlBody).replace(/\\s+/g, ' ');\nconst messageId = $json.message_id;\nconst removalId = $json.extracted_id;\n\n// Handle 'from' being an object (Gmail API format) or a string\nlet fromRaw = $json.original_from || '';\nif (typeof fromRaw === 'object') {\n  if (fromRaw.value && Array.isArray(fromRaw.value) && fromRaw.value.length > 0) {\n    fromRaw = fromRaw.value[0].address || '';\n  } else if (fromRaw.text) {\n    fromRaw = fromRaw.text;\n  } else {\n    fromRaw = JSON.stringify(fromRaw);\n  }\n}\nconst from = String(fromRaw).toLowerCase();\n\nlet status = 'unclear';\nlet reason = null;\nlet confidence = 0;\nlet explanation = '';\nlet company = 'unknown';\nlet matchedRule = 'fallback';\n\n// --- COMPANY DETECTION ---\nif (from.includes('unmask.com')) {\n  company = 'Unmask';\n  matchedRule = 'company-specific';\n  if (fullText.includes('successfully removed from our database') || fullText.includes('successfully expunged from our database of available reports') ||\nfullText.includes('entry is no longer available') ||\nfullText.includes('and did not find a record matching the details provided')) {\n    status = 'completed'; reason = 2; confidence = 0.95;\n    explanation = 'Unmask confirmed full removal.';\n } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'Unmask acknowledged receipt, no action taken yet.';\n  }\n\n} else if (from.includes('mylifecs.atlassian.net') || from.includes('atlassian.net')) {\n  company = 'MyLife';\n  matchedRule = 'company-specific';\n  if (fullText.includes('Please allow 3-5 business days for your account and profile to be completely removed.')) {\n    status = 'completed'; reason = 2; confidence = 0.95;\n    explanation = 'MyLife confirmed deletion with 3-5 business day propagation.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'MyLife reply did not match completion pattern.';\n  }\n\n} else if (from.includes('rocketreach.co')) {\n  company = 'RocketReach';\n  matchedRule = 'company-specific';\n  if (fullText.includes('we have deleted the profile')) {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'RocketReach confirmed full profile deletion.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'RocketReach reply did not match completion pattern.';\n  }\n\n} else if (from.includes('homes.com')) {\n  company = 'Homes.com';\n  matchedRule = 'company-specific';\n   if (fullText.includes('deleting any PI that is not subject to an exception under applicable Law') || fullText.includes('has been removed')) {\n    status = 'completed'; reason = 2; confidence = 0.95;\n    explanation = 'Homes.com confirmed deletion with propagation delay.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'Homes.com reply did not match completion pattern.';\n  }\n\n} else if (from.includes('192.com')) {\n  company = '192.com';\n  matchedRule = 'company-specific';\n  if (fullText.includes('for removal as requested, and this should be reflected on our website in 24 hours')) {\n    status = 'completed'; reason = 2; confidence = 0.95;\n    explanation = '192.com confirmed removal within 24 hours.';\n  } else if (fullText.includes('We do not seem to hold records under')) {\n    status = 'pending'; reason = null; confidence = 0.85;\n    explanation = '192.com says no records found.';\n  }\n\n} else if (from.includes('bizprofile.net')) {\n  company = 'Bizprofile.net';\n  matchedRule = 'company-specific';\nif (/pages?\\s+(has\\s+been|have\\s+been|was|were)\\s+removed/i.test(fullText)) {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'Bizprofile confirmed page removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'Bizprofile reply did not match completion pattern.';\n  }\n\n} else if (from.includes('freepeoplesearch.com')) {\n  company = 'FreePeopleSearch.com';\n  matchedRule = 'company-specific';\n   if (fullText.includes('successfully deleted from our database') || fullText.includes('successfully expunged from our database of available reports')) {\n    status = 'completed'; reason = 2; confidence = 0.95;\n    explanation = 'FreePeopleSearch confirmed deletion with 24-48hr propagation.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'FreePeopleSearch reply did not match completion pattern.';\n  }\n\n} else if (from.includes('checkpeople.com')) {\n  company = 'CheckPeople.com';\n   matchedRule = 'company-specific';\n   if (fullText.includes('successfully deleted from our database') || fullText.includes('successfully expunged') ||\nfullText.includes('successfully removed') ||\nfullText.includes('no longer available in our database of reports')) {\n    status = 'completed'; reason = 2; confidence = 0.95;\n    explanation = 'CheckPeople confirmed removal with 48hr propagation.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'CheckPeople reply did not match completion pattern.';\n  }\n\n} else if (from.includes('nativeamericannetroots.net')) {\n  company = 'Nativeamericannetroots.net';\n  matchedRule = 'company-specific';\n  if (fullText.includes('This is a confirmation that your information has been deleted')) {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'NativeAmericanNetroots confirmed deletion.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'NativeAmericanNetroots reply did not match completion pattern.';\n  }\n\n} else if (from.includes('buzzfile.com')) {\n  company = 'Buzzfile';\n  matchedRule = 'company-specific';\n  if (fullText.includes('we have REMOVED your company profile from Buzzfile')) {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'Buzzfile confirmed profile removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'Buzzfile reply did not match completion pattern.';\n  }\n\n} else if (from.includes('information.com')) {\n  company = 'Information.com';\n  matchedRule = 'company-specific';\n  if (fullText.includes('successfully removed from our database') || fullText.includes('successfully expunged') ||\nfullText.includes('successfully removed') ||\nfullText.includes('no longer available in our database') ||\nfullText.includes('has already been removed or was never in our database')) {\n    status = 'completed'; reason = 2; confidence = 0.95;\n    explanation = 'Information.com confirmed removal with 48hr check.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'Information.com reply did not match completion pattern.';\n  }\n  \n} else if (from.includes('le118000.fr')) {\n  company = '118000.fr';\n  matchedRule = 'company-specific';\n  if (fullText.includes('successfully removed from our database'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = '118000.fr confirmed removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = '118000.fr reply did not match completion pattern.';\n  }\n  \n} else if (from.includes('doximity.com')) {\n  company = 'Doximity';\n  matchedRule = 'company-specific';\n  if (fullText.includes('information has been removed'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'Doximity confirmed removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'Doximity reply did not match completion pattern.';\n  }\n  \n} else if (from.includes('meritpages.com')) {\n  company = 'Meritpages';\n  matchedRule = 'company-specific';\n  if (fullText.includes('page has been removed.'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'Meritpages confirmed removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'Meritpages reply did not match completion pattern.';\n  }\n  \n} else if (from.includes('gulesider.no')) {\n  company = 'gulesider.no';\n  matchedRule = 'company-specific';\n  if (fullText.includes('Bekrefter reservasjon') ||\nfullText.includes('been deleted and removed'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'gulesider.no confirmed removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'gulesider.no reply did not match completion pattern.';\n  }\n  \n} else if (from.includes('adapt.io')) {\n  company = 'adapt.io';\n  matchedRule = 'company-specific';\n  if (fullText.includes('remove the data from our system. This process typically takes 2 to 3 business days to complete.'))\n {\n    status = 'completed'; reason = 2; confidence = 0.95;\n    explanation = 'adapt.io confirmed removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'adapt.io reply did not match completion pattern.';\n  }\n  \n} else if (from.includes('nextdoor.com')) {\n  company = 'Nextdoor';\n  matchedRule = 'company-specific';\n  if (fullText.includes('We have removed the business profile from Nextdoor.') ||\nfullText.includes('removed your business page')) {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'Nextdoor confirmed removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'Nextdoor reply did not match completion pattern.';\n  }\n  \n} else if (from.includes('zoominfo.com')) {\n  company = 'Zoominfo';\n  matchedRule = 'company-specific';\n  if (fullText.includes('completed within'))\n {\n    status = 'completed'; reason = 2; confidence = 0.95;\n    explanation = 'Zoominfo confirmed removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'Zoominfo reply did not match completion pattern.';\n  }\n\n} else if (from.includes('hitta.se')) {\n  company = 'Hitta.se';\n  matchedRule = 'company-specific';\n  if (fullText.includes('will disappear'))\n {\n    status = 'completed'; reason = 2; confidence = 0.95;\n    explanation = 'Hitta.se confirmed removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'Hitta.se reply did not match completion pattern.';\n  }\n\n} else if (from.includes('xing.com')) {\n  company = 'Xing.com';\n  matchedRule = 'company-specific';\n  if (fullText.includes('We hereby confirm the deletion of your account from the XING platform.') ||\n     fullText.includes('has been deleted'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'Xing.com confirmed removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'Xing.com reply did not match completion pattern.';\n  }\n\n} else if (from.includes('bloomberg.net')) {\n  company = 'Bloomberg.net';\n  matchedRule = 'company-specific';\n  if (fullText.includes('removed from Bloomberg.com'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'Bloomberg.net confirmed removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'Bloomberg.net reply did not match completion pattern.';\n  }\n\n} else if (from.includes('peoplerecords.org')) {\n  company = 'ourstates.com';\n  matchedRule = 'company-specific';\n  if (fullText.includes('completed'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'ourstates.com confirmed removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'ourstates.com reply did not match completion pattern.';\n  }\n\n} else if (from.includes('theorg.com')) {\n  company = 'theorg.com';\n  matchedRule = 'company-specific';\n  if (fullText.includes('We have removed'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'theorg.com confirmed removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'theorg.com reply did not match completion pattern.';\n  }\n\n} else if (from.includes('cocofinder.com')) {\n  company = 'cocofinder.com';\n  matchedRule = 'company-specific';\n  if (fullText.includes('removed your data'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'cocofinder.com confirmed removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'cocofinder.com reply did not match completion pattern.';\n  }\n\n} else if (from.includes('clustal.org')) {\n  company = 'Clustal';\n  matchedRule = 'company-specific';\n  if (fullText.includes('successfully removed'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'Clustal confirmed removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'Clustal reply did not match completion pattern.';\n  }\n\n} else if (from.includes('experience.com')) {\n  company = 'experience.com';\n  matchedRule = 'company-specific';\n  if (fullText.includes('completed the deletion'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'experience.com confirmed removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'experience.com reply did not match completion pattern.';\n  }\n\n} else if (from.includes('lead411')) {\n  company = 'lead411';\n  matchedRule = 'company-specific';\n  if (fullText.includes('reviewed and permanently removed'))\n {\n    status = 'completed'; reason = 3; confidence = 0.95;\n    explanation = 'lead411 confirmed removal.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'lead411 reply did not match completion pattern.';\n  }\n\n} else if (from.includes('mapquest.zendesk.com')) {\n  company = 'Mapquest.com';\n  matchedRule = 'company-specific';\n   if (fullText.includes('We have removed') ||\n      fullText.includes('We have removed this listing from our database'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'Mapquest confirmed deletion with propagation delay.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'Mapquest reply did not match completion pattern.';\n  }\n} else if (from.includes('welli.com')) {\n  company = 'welli.com';\n  matchedRule = 'company-specific';\n   if (fullText.includes('has been removed from Welli'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'welli.com confirmed deletion with propagation delay.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'welli.com reply did not match completion pattern.';\n  }\n\n} else if (from.includes('newbizbot.ai')) {\n  company = 'newbizbot.ai';\n  matchedRule = 'company-specific';\n   if (fullText.includes('returns 404'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'newbizbot.ai confirmed deletion with propagation delay.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'newbizbot.ai reply did not match completion pattern.';\n  }\n\n} else if (from.includes('freebackgroundchecks.com')) {\n  company = 'freebackgroundchecks.com';\n  matchedRule = 'company-specific';\n   if (fullText.includes('completed the removal of your data'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'freebackgroundchecks.com confirmed deletion with propagation delay.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'freebackgroundchecks.com reply did not match completion pattern.';\n  }\n\n} else if (from.includes('move.com')) {\n  company = 'move.com';\n  matchedRule = 'company-specific';\n   if (fullText.includes('property is no longer searchable'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'move.com confirmed deletion with propagation delay.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'move.com reply did not match completion pattern.';\n  }\n\n} else if (from.includes('legacy.com')) {\n  company = 'legacy.com';\n  matchedRule = 'company-specific';\n   if (fullText.includes('has been completed on our end and the obituary should be updated online within the hour'))\n {\n    status = 'completed'; reason = 1; confidence = 0.95;\n    explanation = 'legacy.com confirmed deletion with propagation delay.';\n  } else {\n    status = 'pending'; reason = null; confidence = 0.75;\n    explanation = 'legacy.com reply did not match completion pattern.';\n  }\n}\n\n// --- FALLBACK RULES (unknown company) ---\nif (matchedRule === 'fallback') {\n  const lowerText = fullText.toLowerCase();\n  const removedKeywords = ['removed', 'deleted', 'expunged', 'erased', 'opted out successfully'];\n  const hasRemovalConfirmation = removedKeywords.some(kw => lowerText.includes(kw));\n\n  if (hasRemovalConfirmation) {\n    const shortTimeframe = /\\b(24|48)\\s*hours?\\b|\\b[1-5]\\s*business\\s*days?\\b/i;\n    const longTimeframe = /\\b(7|10|14|15|21|30)\\s*(business\\s*)?days?\\b|\\b(one|two|three|four)\\s*weeks?\\b/i;\n\n    if (longTimeframe.test(fullText)) {\n      status = 'completed'; reason = 3; confidence = 0.55;\n      explanation = 'Fallback: removal confirmed with longer timeframe (7-30 days).';\n    } else if (shortTimeframe.test(fullText)) {\n      status = 'completed'; reason = 2; confidence = 0.6;\n      explanation = 'Fallback: removal confirmed with short timeframe (up to 5 days).';\n    } else {\n      status = 'completed'; reason = 1; confidence = 0.55;\n      explanation = 'Fallback: removal confirmed with no pending timeframe.';\n    }\n  } else {\n    const ackKeywords = ['received your request', 'we have received', 'ticket has been created', 'request has been submitted'];\n    const hasAck = ackKeywords.some(kw => lowerText.includes(kw));\n\n    if (hasAck) {\n      status = 'pending'; reason = null; confidence = 0.5;\n      explanation = 'Fallback: acknowledgment only, no action confirmed.';\n    } else {\n      status = 'unclear'; reason = null; confidence = 0.3;\n      explanation = 'Fallback: could not determine if action was taken.';\n    }\n  }\n}\n\nreturn {\n  json: {\n    removal_id: removalId,\n    company: company,\n    status: status,\n    reason: reason,\n    confidence: confidence,\n    explanation: explanation,\n    message_id: messageId,\n    matched_rule: matchedRule\n  }\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        848,
+        0
+      ],
+      "id": "1efa747b-f634-48f3-98d9-5816d0f32730",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "993027aa-d552-480a-b7e8-47f1c93ba993",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1056,
+        0
+      ],
+      "id": "dd694725-735b-42ed-a968-da59ea72adb2",
+      "name": "If1"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1OhEohlpMe8BU5fz3h9zjmN-mWL0mSKdT9lt8tGdSJLo",
+          "mode": "list",
+          "cachedResultName": "Custom Removals tracking",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1OhEohlpMe8BU5fz3h9zjmN-mWL0mSKdT9lt8tGdSJLo/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Requests",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1OhEohlpMe8BU5fz3h9zjmN-mWL0mSKdT9lt8tGdSJLo/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Status": "Completed",
+            "1st FU": "=",
+            "2nd FU": "=",
+            "3rd FU": "=",
+            "Close": "=",
+            "Email ID": "={{ $json.removal_id }}"
+          },
+          "matchingColumns": [
+            "Email ID"
+          ],
+          "schema": [
+            {
+              "id": "Client",
+              "displayName": "Client",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "URL",
+              "displayName": "URL",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Submission method ",
+              "displayName": "Submission method ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Email used ",
+              "displayName": "Email used ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Email/Form for submission",
+              "displayName": "Email/Form for submission",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Email ID",
+              "displayName": "Email ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Form ID",
+              "displayName": "Form ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Submission date",
+              "displayName": "Submission date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Owner",
+              "displayName": "Owner",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "1st FU",
+              "displayName": "1st FU",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "2nd FU",
+              "displayName": "2nd FU",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "3rd FU",
+              "displayName": "3rd FU",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Close",
+              "displayName": "Close",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "next step date",
+              "displayName": "next step date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Beta",
+              "displayName": "Beta",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1632,
+        -16
+      ],
+      "id": "3b8738ea-46f3-4223-8bd5-bf036f8fa049",
+      "name": "Update row in sheet",
+      "alwaysOutputData": false,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "g8s7z9dzV8TpP98i",
+          "name": "Google Sheets account 7"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return {\n  json: {\n    ...$input.item.json,  // Keep everything\n    spreadsheet_id: $input.item.json.removal_id.replace('ID-', '')  // Add version without prefix\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1312,
+        -16
+      ],
+      "id": "06169bda-bc7f-4409-ae32-46c5a8bf8e68",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Get the reason from AI classification\nconst reason = $input.item.json.reason;\n\n// Map reason codes to API endpoint UUIDs\nconst reasonMapping = {\n  1: \"ec0daf2e-8cb1-485d-bde1-8bc128384b7a\",\n  2: \"91764f74-d743-4d0b-8834-8375da7b1021\",\n  3: \"1f8896a4-3a00-4c4d-9479-4949e6dfb078\"\n};\n\n// Get the mapped endpoint\nconst apiReasonEndpoint = reasonMapping[reason];\n\n// Return all data plus the mapped endpoint\nreturn {\n  json: {\n    ...$input.item.json,  // Keep all existing data\n    api_reason_endpoint: apiReasonEndpoint\n  }\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1488,
+        -16
+      ],
+      "id": "09278cb5-c1ce-44a8-b094-cb3221ae030d",
+      "name": "API reason"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://auth.incogni.com/realms/incogni/protocol/openid-connect/token",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "grant_type",
+              "value": "client_credentials"
+            },
+            {
+              "name": "client_id",
+              "value": "automation-agent-client"
+            },
+            {
+              "name": "client_secret",
+              "value": "gQs563m9C58fU5Sg5KZTYLk4SraTkSfA"
+            },
+            {
+              "name": "scope",
+              "value": "openid"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1808,
+        -16
+      ],
+      "id": "520c350b-4704-4fe2-b9d8-6632097f9800",
+      "name": "token"
+    },
+    {
+      "parameters": {
+        "url": "=https://custom-removals-api.prdbe.conigni.com/api/admin/v1/custom-removals",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "externalId",
+              "value": "={{ $('API reason').item.json.removal_id }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('token').item.json.access_token}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1968,
+        -16
+      ],
+      "id": "e0018542-199b-42ec-8f20-bfbb577f6c2d",
+      "name": "HTTP Request2"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ \"https://custom-removals-api.prdbe.conigni.com/api/admin/v1/custom-removals/\" +  $json.data[0].uuid}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('token').first().json.access_token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"state\": \"completed\",\n  \"stateReasonUuid\": \"{{ $('API reason').item.json.api_reason_endpoint }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2112,
+        -16
+      ],
+      "id": "63252ca0-ecc1-4e2b-a399-eb2b99b0bc91",
+      "name": "HTTP Request3",
+      "executeOnce": false,
+      "retryOnFail": false,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "markAsRead",
+        "messageId": "={{ $('API reason').item.json.message_id }}"
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2336,
+        -32
+      ],
+      "id": "ec03abd8-077b-4e69-8859-fc558489869b",
+      "name": "Mark a message as read",
+      "webhookId": "eabf5149-0b43-4242-bd78-84a4f592bd8b",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "HuE9BjMKMt1Uhmc2",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "=0 0,6,7,8,9,10,11,12,13,14,15,16,17,18,20,21,23 * * *"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        32,
+        0
+      ],
+      "id": "d73a90af-8dc9-49d8-a37b-846e3614f97d",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "dbadf6e8-0dbe-4c56-a6a6-213ef90762f0",
+              "leftValue": "={{ $json.data }}",
+              "rightValue": "",
+              "operator": {
+                "type": "array",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2224,
+        176
+      ],
+      "id": "1629314e-c89f-4ced-b55d-854fd231fc34",
+      "name": "If2"
+    }
+  ],
+  "pinData": {
+    "Schedule Trigger": [
+      {
+        "json": {
+          "timestamp": "2026-06-17T12:00:00.016+02:00",
+          "Readable date": "June 17th 2026, 12:00:00 pm",
+          "Readable time": "12:00:00 pm",
+          "Day of week": "Wednesday",
+          "Year": "2026",
+          "Month": "June",
+          "Day of month": "17",
+          "Hour": "12",
+          "Minute": "00",
+          "Second": "00",
+          "Timezone": "Europe/Prague (UTC+02:00)"
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Get many messages": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Update row in sheet": {
+      "main": [
+        [
+          {
+            "node": "token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "API reason",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API reason": {
+      "main": [
+        [
+          {
+            "node": "Update row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "token": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request2": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request3": {
+      "main": [
+        [
+          {
+            "node": "Mark a message as read",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get many messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If2": {
+      "main": [
+        [
+          {
+            "node": "Mark a message as read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "xm8Ml60e1ARzL1yf"
+  },
+  "versionId": "8ea05636-0df6-4a1a-91a9-01fb570e028c",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "d165545424d6c4d6cfe34c0d11e9fd86ce137e6cf08622369077d2a993baa2c4"
+  },
+  "id": "xm8Ml60e1ARzL1yf",
+  "tags": []
+}
